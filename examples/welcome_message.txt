@@ -1,0 +1,13 @@
+Hello {name},
+
+Thank you for being part of our community! We're excited to have you join us.
+
+Here are some useful resources:
+- Website: https://example.com
+- Documentation: https://docs.example.com
+- Support: support@example.com
+
+Feel free to reach out if you have any questions!
+
+Best regards,
+The Team

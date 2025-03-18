@@ -1,0 +1,11 @@
+version: '3'
+
+services:
+  telegram-toolkit:
+    build: .
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TZ=UTC
+    tty: true
+    stdin_open: true
