@@ -2,8 +2,6 @@
 
 A professional tool for Telegram group management, member scraping, and messaging.
 
-![Telegram Toolkit](https://via.placeholder.com/800x400?text=Telegram+Toolkit)
-
 ## Features
 
 - **Member Scraping**: Extract members from any Telegram group you're part of
@@ -24,7 +22,7 @@ pip install telegram-toolkit
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/telegram-toolkit.git
+git clone https://LIMBO-2018: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@github.com/LIMBO-2018/telegram-toolkit.git
 cd telegram-toolkit
 pip install -e .
 ```
