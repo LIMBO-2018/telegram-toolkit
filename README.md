@@ -22,7 +22,7 @@ pip install telegram-toolkit
 ### From Source
 
 ```bash
-git clone https://LIMBO-2018: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@github.com/LIMBO-2018/telegram-toolkit.git
+git clone https://github.com/LIMBO-2018/telegram-toolkit.git
 cd telegram-toolkit
 pip install -e .
 ```
