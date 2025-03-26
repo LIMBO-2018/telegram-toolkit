@@ -38,7 +38,7 @@ def setup_command(
 ):
     """Setup and configure the Telegram Toolkit."""
     if config:
-        setup.configure()
+        setup.configure_api()
     elif install:
         setup.install_dependencies()
     elif update:
