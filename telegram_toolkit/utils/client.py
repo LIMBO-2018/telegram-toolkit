@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 from functools import wraps
+from typing import Optional
 
 from telethon.sync import TelegramClient
 from telethon.errors import SessionPasswordNeededError
@@ -50,7 +51,6 @@ def _acquire_lock(session_name: str) -> Path:
                 f"Another Telegram Toolkit process is already using this session (PID {pid}). "
                 "Close it before starting another command."
             )
-        # Stale lock left by a crashed/killed process.
         try:
             path.unlink()
         except FileNotFoundError:
@@ -61,14 +61,12 @@ def _acquire_lock(session_name: str) -> Path:
         return path
 
 
-def _release_lock(path: Path | None) -> None:
+def _release_lock(path: Optional[Path]) -> None:
     if path is None:
         return
     try:
         path.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError:
+    except (FileNotFoundError, OSError):
         pass
 
 
@@ -117,7 +115,7 @@ def get_telegram_client():
                 client.sign_in(password=password)
 
         client = _patch_disconnect(client, lock_path)
-        lock_path = None  # ownership moved to the wrapped disconnect
+        lock_path = None
         console.print("[bold green]Successfully connected to Telegram![/bold green]")
         return client
 
