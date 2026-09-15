@@ -1,104 +1,95 @@
-"""
-Member scraping functionality.
-"""
+"""Member discovery functionality."""
 
-from telethon.sync import TelegramClient
-from telethon.tl.functions.messages import GetDialogsRequest
-from telethon.tl.types import InputPeerEmpty
+from datetime import datetime, timedelta, timezone
+
 from rich.console import Console
 from rich.prompt import IntPrompt
 from rich.progress import Progress
-import time
-from datetime import datetime, timedelta
+from telethon.tl.functions.messages import GetDialogsRequest
+from telethon.tl.types import InputPeerEmpty, UserStatusOnline, UserStatusOffline, UserStatusRecently
 
 from telegram_toolkit.utils.client import get_telegram_client
 from telegram_toolkit.utils.csv_handler import save_members_to_csv
 
 console = Console()
 
+
+def _is_active(user, cutoff):
+    """Return whether Telegram exposes a recent enough status for this user."""
+    status = getattr(user, "status", None)
+    if isinstance(status, UserStatusOnline):
+        return True
+    if isinstance(status, UserStatusOffline):
+        last_seen = status.was_online
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        return last_seen >= cutoff
+    # Telegram's Recently status deliberately does not expose an exact time.
+    # Treat it as active rather than inventing a timestamp.
+    if isinstance(status, UserStatusRecently):
+        return True
+    return False
+
+
+def _fetch_dialogs(client):
+    """Fetch dialogs through Telethon's iterator so pagination is handled."""
+    dialogs = []
+    for dialog in client.iter_dialogs():
+        dialogs.append(dialog)
+    return dialogs
+
+
 def scrape_members(output_file="members.csv", filter_active=False, limit=0):
-    """Scrape members from a Telegram group."""
+    """Discover members from a group the logged-in account can access."""
     client = get_telegram_client()
     if not client:
-        return
-    
+        return False
+
     try:
-        # Get all dialogs
         console.print("[bold yellow]Fetching dialogs...[/bold yellow]")
-        
-        with Progress() as progress:
-            task = progress.add_task("[green]Fetching dialogs...", total=None)
-            
-            result = client(GetDialogsRequest(
-                offset_date=None,
-                offset_id=0,
-                offset_peer=InputPeerEmpty(),
-                limit=200,
-                hash=0
-            ))
-            
-            progress.update(task, completed=True)
-        
-        # Filter for groups
-        groups = []
-        for chat in result.chats:
-            if hasattr(chat, 'megagroup') and chat.megagroup:
-                groups.append(chat)
-        
-        # Display groups
+        dialogs = _fetch_dialogs(client)
+        groups = [
+            dialog.entity
+            for dialog in dialogs
+            if getattr(dialog, "is_group", False)
+            and getattr(dialog.entity, "megagroup", False)
+        ]
+
+        if not groups:
+            console.print("[bold red]No accessible groups found.[/bold red]")
+            return False
+
         console.print("[bold green]Available Groups:[/bold green]")
         for i, group in enumerate(groups):
             console.print(f"[cyan]{i}[/cyan]: [yellow]{group.title}[/yellow] (ID: {group.id})")
-        
-        # Select group
+
         group_index = IntPrompt.ask(
-            "[bold green]Enter the number of the group to scrape",
+            "[bold green]Enter the number of the group to inspect",
             default=0,
-            show_default=True
         )
-        
-        if group_index < 0 or group_index >= len(groups):
+        if not 0 <= group_index < len(groups):
             console.print("[bold red]Invalid group selection.[/bold red]")
-            return
-        
+            return False
+
         target_group = groups[group_index]
         console.print(f"[bold green]Selected group: [yellow]{target_group.title}[/yellow][/bold green]")
-        
-        # Fetch members
         console.print("[bold yellow]Fetching members...[/bold yellow]")
-        
-        with Progress() as progress:
-            task = progress.add_task("[green]Fetching members...", total=None)
-            
-            all_members = []
-            
-            # Get all participants with a limit if specified
-            participants = client.get_participants(
-                target_group,
-                aggressive=True,
-                limit=limit if limit > 0 else None
-            )
-            
-            # Filter active users if requested
-            if filter_active:
-                now = datetime.now()
-                one_week_ago = now - timedelta(days=7)
-                
-                for participant in participants:
-                    if hasattr(participant.status, 'was_online') and participant.status.was_online:
-                        last_seen = participant.status.was_online
-                        if last_seen > one_week_ago:
-                            all_members.append(participant)
-            else:
-                all_members = participants
-            
-            progress.update(task, completed=True)
-        
-        # Save to CSV
-        console.print(f"[bold green]Found {len(all_members)} members.[/bold green]")
-        save_members_to_csv(all_members, target_group, output_file)
-        
+
+        fetch_limit = limit if limit > 0 else None
+        participants = client.get_participants(target_group, limit=fetch_limit)
+
+        if filter_active:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+            members = [user for user in participants if _is_active(user, cutoff)]
+        else:
+            members = list(participants)
+
+        console.print(f"[bold green]Found {len(members)} members.[/bold green]")
+        save_members_to_csv(members, target_group, output_file)
+        return True
+
     except Exception as e:
-        console.print(f"[bold red]Error: {str(e)}[/bold red]")
+        console.print(f"[bold red]Error: {e}[/bold red]")
+        return False
     finally:
         client.disconnect()
