@@ -1,167 +1,101 @@
-"""
-Add members to a Telegram group.
-"""
+"""Consent-based Telegram group member management."""
 
-import time
-import random
 from rich.console import Console
-from rich.prompt import IntPrompt, Prompt
 from rich.progress import Progress
+from rich.prompt import IntPrompt, Prompt
+from telethon.errors.rpcerrorlist import (
+    FloodWaitError,
+    UserChannelsTooMuchError,
+    UserNotMutualContactError,
+    UserPrivacyRestrictedError,
+)
 from telethon.tl.functions.channels import InviteToChannelRequest
 from telethon.tl.types import InputPeerUser
-from telethon.errors.rpcerrorlist import UserPrivacyRestrictedError, FloodWaitError, UserNotMutualContactError, UserChannelsTooMuchError
 
 from telegram_toolkit.utils.client import get_telegram_client
 from telegram_toolkit.utils.csv_handler import load_members_from_csv
 
 console = Console()
 
+
 def add_members(input_file, delay=15, limit=0):
-    """Add members to a Telegram group."""
+    """Add explicitly authorized/consenting users from a CSV to a group."""
+    if delay < 0 or limit < 0:
+        console.print("[bold red]Delay and limit must be zero or greater.[/bold red]")
+        return False
+
     client = get_telegram_client()
     if not client:
-        return
-    
+        return False
+
     try:
-        # Load members from CSV
         members = load_members_from_csv(input_file)
-        
-        # Get available groups
+        if not members:
+            console.print("[bold red]No valid members found in the CSV.[/bold red]")
+            return False
+
         dialogs = client.get_dialogs()
-        groups = []
-        
-        for dialog in dialogs:
-            if dialog.is_group or dialog.is_channel:
-                groups.append(dialog)
-        
+        groups = [dialog for dialog in dialogs if dialog.is_group or dialog.is_channel]
         if not groups:
-            console.print("[bold red]No groups found.[/bold red]")
-            return
-        
-        # Display available groups with proper indexing
-        for i, dialog in enumerate(groups):
-            console.print(f"[cyan]{i+1}[/cyan]: {dialog.name}")
-        
-        # Select target group
-        group_index = IntPrompt.ask(
-            "[bold green]Select a group to add members to",
-            default=1,
-            show_default=True
-        ) - 1
-        
-        if group_index < 0 or group_index >= len(groups):
-            console.print("[bold red]Invalid group selection. Please choose a number between 1 and " + str(len(groups)) + ".[/bold red]")
-            return
-        
+            console.print("[bold red]No accessible groups found.[/bold red]")
+            return False
+
+        for i, dialog in enumerate(groups, start=1):
+            console.print(f"[cyan]{i}[/cyan]: {dialog.name}")
+
+        group_index = IntPrompt.ask("[bold green]Select a target group[/bold green]", default=1) - 1
+        if not 0 <= group_index < len(groups):
+            console.print("[bold red]Invalid group selection.[/bold red]")
+            return False
+
         target_group = groups[group_index]
-        
-        # Ask for mode
-        console.print("[bold green]Select mode:[/bold green]")
-        console.print("[cyan]1[/cyan]: Add by user ID + access hash")
-        console.print("[cyan]2[/cyan]: Add by username")
-        
-        mode = IntPrompt.ask(
-            "[bold green]Enter mode",
-            default=1,
-            show_default=True
+        selected = members[:limit] if limit > 0 else members
+        console.print(
+            f"[bold yellow]Only add users for whom you have appropriate consent/authorization. "
+            f"Target: {target_group.name}; records: {len(selected)}.[/bold yellow]"
         )
-        
-        if mode not in [1, 2]:
-            console.print("[bold red]Invalid mode selection.[/bold red]")
-            return
-        
-        # Confirm before proceeding
-        total_members = len(members)
-        if limit > 0 and limit < total_members:
-            total_members = limit
-        
-        confirm = Prompt.ask(
-            f"[bold yellow]You are about to add {total_members} members to {target_group.name} chat. Continue?[/bold yellow]",
-            choices=["y", "n"],
-            default="n"
-        )
-        
+        confirm = Prompt.ask("Continue?", choices=["y", "n"], default="n")
         if confirm.lower() != "y":
-            console.print("[bold yellow]Operation cancelled.[/bold yellow]")
-            return
-        
-        # Add members
+            console.print("[yellow]Operation cancelled.[/yellow]")
+            return False
+
         added = 0
         errors = 0
-        
         with Progress() as progress:
-            task = progress.add_task("[green]Adding members...", total=total_members)
-            
-            for i, user in enumerate(members):
-                if limit > 0 and added >= limit:
-                    break
-                
+            task = progress.add_task("[green]Adding members...", total=len(selected))
+            for user in selected:
                 try:
-                    if mode == 1:
-                        # CSV exports contain both the Telegram user ID and that
-                        # account's access_hash.  get_input_entity(user_id) only
-                        # searches Telethon's local entity cache and therefore
-                        # fails for users not already seen by this session.
-                        # Construct the InputPeer directly from the stored pair.
-                        try:
-                            user_id = int(user['id'])
-                            access_hash = int(user['access_hash'])
-                        except (KeyError, TypeError, ValueError):
-                            raise ValueError(
-                                f"Invalid/missing id or access_hash for {user.get('name', 'unknown user')}"
-                            )
-
-                        user_to_add = InputPeerUser(
-                            user_id=user_id,
-                            access_hash=access_hash
-                        )
-                    else:
-                        if not user['username']:
-                            console.print(f"[yellow]Skipping user {user['name']} (no username)[/yellow]")
-                            progress.update(task, advance=1)
-                            continue
-                        user_to_add = client.get_input_entity(user['username'])
-                    
-                    client(InviteToChannelRequest(
-                        channel=target_group.id,
-                        users=[user_to_add]
-                    ))
-                    
+                    if not user.get("access_hash"):
+                        raise ValueError("missing access_hash")
+                    peer = InputPeerUser(int(user["id"]), int(user["access_hash"]))
+                    client(InviteToChannelRequest(channel=target_group.entity, users=[peer]))
                     added += 1
-                    console.print(f"[green]Added {user['name']} ({added}/{total_members})[/green]")
-                    
-                    # Random delay to reduce accidental rapid-fire requests.
-                    actual_delay = delay + random.randint(-5, 5)
-                    if actual_delay < 5:
-                        actual_delay = 5
-                    
-                    time.sleep(actual_delay)
-                    
-                except UserPrivacyRestrictedError:
-                    console.print(f"[yellow]Couldn't add {user['name']} due to privacy settings.[/yellow]")
+                    console.print(f"[green]Added {user['name']} ({added}/{len(selected)})[/green]")
+                except FloodWaitError as exc:
+                    console.print(
+                        f"[bold red]Telegram requested a flood wait of {exc.seconds} seconds. "
+                        "Stopping safely instead of trying to bypass the limit.[/bold red]"
+                    )
                     errors += 1
-                except FloodWaitError as e:
-                    wait_time = e.seconds
-                    console.print(f"[bold red]Flood wait error. Waiting for {wait_time} seconds.[/bold red]")
-                    time.sleep(wait_time)
+                    break
+                except UserPrivacyRestrictedError:
+                    console.print(f"[yellow]Privacy settings prevent adding {user['name']}.[/yellow]")
                     errors += 1
                 except UserNotMutualContactError:
-                    console.print(f"[yellow]Couldn't add {user['name']} because they don't have you as a contact.[/yellow]")
+                    console.print(f"[yellow]Telegram requires a mutual contact for {user['name']}.[/yellow]")
                     errors += 1
                 except UserChannelsTooMuchError:
-                    console.print(f"[yellow]Couldn't add {user['name']} because they're in too many channels.[/yellow]")
+                    console.print(f"[yellow]{user['name']} is in too many channels.[/yellow]")
                     errors += 1
-                except Exception as e:
-                    console.print(f"[red]Error adding {user['name']}: {str(e)}[/red]")
+                except Exception as exc:
+                    console.print(f"[red]Error adding {user['name']}: {exc}[/red]")
                     errors += 1
-                
-                progress.update(task, advance=1)
-        
+                finally:
+                    progress.advance(task)
+
         console.print(f"[bold green]Added {added} members successfully.[/bold green]")
-        if errors > 0:
+        if errors:
             console.print(f"[bold yellow]Encountered {errors} errors.[/bold yellow]")
-        
-    except Exception as e:
-        console.print(f"[bold red]Error: {str(e)}[/bold red]")
+        return errors == 0
     finally:
         client.disconnect()
