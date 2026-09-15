@@ -1,66 +1,52 @@
-"""
-Tests for configuration utilities.
-"""
-
-import unittest
 import os
-import configparser
-from telegram_toolkit.utils.config import check_config_exists, save_config, load_config
+import unittest
+from pathlib import Path
+
+from telegram_toolkit.utils.config import check_config_exists, get_credentials, load_config, save_config
+
 
 class TestConfig(unittest.TestCase):
-    """Test configuration utilities."""
-    
-    def setUp(self):
-        """Set up test environment."""
-        # Remove config file if it exists
-        if os.path.exists('config.data'):
-            os.rename('config.data', 'config.data.bak')
-        if os.path.exists('.env'):
-            os.rename('.env', '.env.bak')
-    
-    def tearDown(self):
-        """Clean up after tests."""
-        # Remove test config file
-        if os.path.exists('config.data'):
-            os.remove('config.data')
-        if os.path.exists('.env'):
-            os.remove('.env')
-        
-        # Restore original config if it existed
-        if os.path.exists('config.data.bak'):
-            os.rename('config.data.bak', 'config.data')
-        if os.path.exists('.env.bak'):
-            os.rename('.env.bak', '.env')
-    
-    def test_check_config_exists(self):
-        """Test check_config_exists function."""
-        # Config should not exist initially
-        self.assertFalse(check_config_exists())
-        
-        # Create empty config file
-        with open('config.data', 'w') as f:
-            pass
-        
-        # Config should exist now
-        self.assertTrue(check_config_exists())
-    
-    def test_save_and_load_config(self):
-        """Test saving and loading configuration."""
-        # Save test configuration
-        save_config('12345', 'abcdef1234567890', '+1234567890')
-        
-        # Check if config file was created
-        self.assertTrue(os.path.exists('config.data'))
-        self.assertTrue(os.path.exists('.env'))
-        
-        # Load configuration
-        config = load_config()
-        
-        # Verify loaded configuration
-        self.assertIsNotNone(config)
-        self.assertEqual(config['cred']['id'], '12345')
-        self.assertEqual(config['cred']['hash'], 'abcdef1234567890')
-        self.assertEqual(config['cred']['phone'], '+1234567890')
+    """Tests for credential configuration."""
 
-if __name__ == '__main__':
+    def setUp(self):
+        self.config = Path("config.data")
+        self.env = Path(".env")
+        self.config_bak = Path("config.data.test-bak")
+        self.env_bak = Path(".env.test-bak")
+        for path in (self.config_bak, self.env_bak):
+            path.unlink(missing_ok=True)
+        if self.config.exists():
+            self.config.rename(self.config_bak)
+        if self.env.exists():
+            self.env.rename(self.env_bak)
+
+    def tearDown(self):
+        for path in (self.config, self.env):
+            path.unlink(missing_ok=True)
+        if self.config_bak.exists():
+            self.config_bak.rename(self.config)
+        if self.env_bak.exists():
+            self.env_bak.rename(self.env)
+
+    def test_check_config_requires_valid_credentials(self):
+        self.assertFalse(check_config_exists())
+        self.config.write_text("[cred]\nid=12345\nhash=testhash\nphone=+123456789\n", encoding="utf-8")
+        self.assertTrue(check_config_exists())
+
+    def test_save_and_load_config(self):
+        save_config("12345", "abcdef1234567890", "+1234567890")
+        self.assertTrue(self.config.exists())
+        self.assertTrue(self.env.exists())
+        config = load_config()
+        self.assertEqual(config["cred"]["id"], "12345")
+        self.assertEqual(config["cred"]["hash"], "abcdef1234567890")
+        self.assertEqual(config["cred"]["phone"], "+1234567890")
+        self.assertEqual(get_credentials(), ("12345", "abcdef1234567890", "+1234567890"))
+
+    def test_invalid_api_id_is_rejected(self):
+        with self.assertRaises(ValueError):
+            save_config("not-a-number", "hash", "+1234567890")
+
+
+if __name__ == "__main__":
     unittest.main()
