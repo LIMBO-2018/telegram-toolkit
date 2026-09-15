@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.prompt import IntPrompt, Prompt
 from rich.progress import Progress
 from telethon.tl.functions.channels import InviteToChannelRequest
+from telethon.tl.types import InputPeerUser
 from telethon.errors.rpcerrorlist import UserPrivacyRestrictedError, FloodWaitError, UserNotMutualContactError, UserChannelsTooMuchError
 
 from telegram_toolkit.utils.client import get_telegram_client
@@ -56,7 +57,7 @@ def add_members(input_file, delay=15, limit=0):
         
         # Ask for mode
         console.print("[bold green]Select mode:[/bold green]")
-        console.print("[cyan]1[/cyan]: Add by user ID")
+        console.print("[cyan]1[/cyan]: Add by user ID + access hash")
         console.print("[cyan]2[/cyan]: Add by username")
         
         mode = IntPrompt.ask(
@@ -97,10 +98,27 @@ def add_members(input_file, delay=15, limit=0):
                 
                 try:
                     if mode == 1:
-                        user_to_add = client.get_input_entity(int(user['id']))
+                        # CSV exports contain both the Telegram user ID and that
+                        # account's access_hash.  get_input_entity(user_id) only
+                        # searches Telethon's local entity cache and therefore
+                        # fails for users not already seen by this session.
+                        # Construct the InputPeer directly from the stored pair.
+                        try:
+                            user_id = int(user['id'])
+                            access_hash = int(user['access_hash'])
+                        except (KeyError, TypeError, ValueError):
+                            raise ValueError(
+                                f"Invalid/missing id or access_hash for {user.get('name', 'unknown user')}"
+                            )
+
+                        user_to_add = InputPeerUser(
+                            user_id=user_id,
+                            access_hash=access_hash
+                        )
                     else:
                         if not user['username']:
                             console.print(f"[yellow]Skipping user {user['name']} (no username)[/yellow]")
+                            progress.update(task, advance=1)
                             continue
                         user_to_add = client.get_input_entity(user['username'])
                     
@@ -112,7 +130,7 @@ def add_members(input_file, delay=15, limit=0):
                     added += 1
                     console.print(f"[green]Added {user['name']} ({added}/{total_members})[/green]")
                     
-                    # Random delay to avoid flood
+                    # Random delay to reduce accidental rapid-fire requests.
                     actual_delay = delay + random.randint(-5, 5)
                     if actual_delay < 5:
                         actual_delay = 5
@@ -126,6 +144,7 @@ def add_members(input_file, delay=15, limit=0):
                     wait_time = e.seconds
                     console.print(f"[bold red]Flood wait error. Waiting for {wait_time} seconds.[/bold red]")
                     time.sleep(wait_time)
+                    errors += 1
                 except UserNotMutualContactError:
                     console.print(f"[yellow]Couldn't add {user['name']} because they don't have you as a contact.[/yellow]")
                     errors += 1
