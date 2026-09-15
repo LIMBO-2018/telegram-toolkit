@@ -1,71 +1,87 @@
-"""
-Configuration utilities for Telegram Toolkit.
-"""
+"""Configuration utilities for Telegram Toolkit."""
 
-import os
 import configparser
-from rich.console import Console
-from rich.prompt import Prompt
-import dotenv
+import os
 from pathlib import Path
+
+import dotenv
+from rich.console import Console
 
 console = Console()
 
-CONFIG_FILE = "config.data"
-ENV_FILE = ".env"
+CONFIG_FILE = Path("config.data")
+ENV_FILE = Path(".env")
+
+
+def _valid_credentials(api_id, api_hash, phone):
+    """Return True only when all required credentials are present and usable."""
+    if not api_id or not api_hash or not phone:
+        return False
+    try:
+        int(str(api_id).strip())
+    except (TypeError, ValueError):
+        return False
+    return bool(str(api_hash).strip() and str(phone).strip())
+
 
 def check_config_exists():
-    """Check if the configuration file exists."""
-    return os.path.exists(CONFIG_FILE)
+    """Check whether usable Telegram credentials are configured."""
+    credentials = get_credentials(silent=True)
+    return bool(credentials)
+
 
 def load_config():
-    """Load configuration from config file."""
-    if not check_config_exists():
-        console.print("[bold red]Configuration file not found. Run setup first.[/bold red]")
+    """Load the legacy config.data file."""
+    if not CONFIG_FILE.exists():
         return None
-    
-    config = configparser.RawConfigParser()
-    config.read(CONFIG_FILE)
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE, encoding="utf-8")
     return config
 
+
 def save_config(api_id, api_hash, phone):
-    """Save API configuration to config file."""
-    config = configparser.RawConfigParser()
-    config.add_section('cred')
-    config.set('cred', 'id', api_id)
-    config.set('cred', 'hash', api_hash)
-    config.set('cred', 'phone', phone)
-    
-    with open(CONFIG_FILE, 'w') as f:
-        config.write(f)
-    
-    # Also save to .env for alternative configuration
-    with open(ENV_FILE, 'w') as f:
-        f.write(f"API_ID={api_id}\n")
-        f.write(f"API_HASH={api_hash}\n")
-        f.write(f"PHONE={phone}\n")
-    
+    """Validate and save Telegram API credentials to local config files."""
+    api_id = str(api_id).strip()
+    api_hash = str(api_hash).strip()
+    phone = str(phone).strip()
+    if not _valid_credentials(api_id, api_hash, phone):
+        raise ValueError("Invalid API ID, API Hash, or phone number.")
+
+    config = configparser.ConfigParser()
+    config["cred"] = {"id": api_id, "hash": api_hash, "phone": phone}
+    CONFIG_FILE.write_text(_config_to_text(config), encoding="utf-8")
+    ENV_FILE.write_text(
+        f"API_ID={api_id}\nAPI_HASH={api_hash}\nPHONE={phone}\n",
+        encoding="utf-8",
+    )
     console.print("[bold green]Configuration saved successfully![/bold green]")
 
-def get_credentials():
-    """Get API credentials from config file."""
-    if os.path.exists(ENV_FILE):
-        dotenv.load_dotenv(ENV_FILE)
-        api_id = os.getenv("API_ID")
-        api_hash = os.getenv("API_HASH")
-        phone = os.getenv("PHONE")
-        if api_id and api_hash and phone:
-            return api_id, api_hash, phone
-    
+
+def _config_to_text(config):
+    from io import StringIO
+    buffer = StringIO()
+    config.write(buffer)
+    return buffer.getvalue()
+
+
+def get_credentials(silent=False):
+    """Load credentials, preferring .env and falling back to config.data."""
+    dotenv_values = dotenv.dotenv_values(ENV_FILE) if ENV_FILE.exists() else {}
+    api_id = dotenv_values.get("API_ID")
+    api_hash = dotenv_values.get("API_HASH")
+    phone = dotenv_values.get("PHONE")
+
+    if _valid_credentials(api_id, api_hash, phone):
+        return str(api_id).strip(), str(api_hash).strip(), str(phone).strip()
+
     config = load_config()
-    if not config:
-        return None, None, None
-    
-    try:
-        api_id = config['cred']['id']
-        api_hash = config['cred']['hash']
-        phone = config['cred']['phone']
-        return api_id, api_hash, phone
-    except KeyError:
-        console.print("[bold red]Invalid configuration file. Run setup again.[/bold red]")
-        return None, None, None
+    if config and config.has_section("cred"):
+        api_id = config.get("cred", "id", fallback=None)
+        api_hash = config.get("cred", "hash", fallback=None)
+        phone = config.get("cred", "phone", fallback=None)
+        if _valid_credentials(api_id, api_hash, phone):
+            return str(api_id).strip(), str(api_hash).strip(), str(phone).strip()
+
+    if not silent:
+        console.print("[bold red]Configuration not found or invalid. Run 'telegram-toolkit setup --config'.[/bold red]")
+    return None
